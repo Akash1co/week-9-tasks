@@ -1,0 +1,54 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::prefix('cia/career')
+    ->middleware(['auth'])
+    ->group(function () {
+        Route::get('/dashboard', function () {
+            return response()->json([
+                'message' => 'Career intelligence dashboard endpoint is ready.',
+            ]);
+        })->name('cia.career.dashboard');
+
+        Route::get('/profiles/{candidate_id}', function (string $candidate_id) {
+            return response()->json([
+                'message' => 'Candidate profile endpoint is ready.',
+                'candidate_id' => $candidate_id,
+            ]);
+        })->name('cia.career.profiles.show');
+
+        Route::post('/profiles', function () {
+            return response()->json([
+                'message' => 'Candidate profile creation endpoint is ready.',
+            ], 201);
+        })->name('cia.career.profiles.store');
+
+        Route::put('/profiles/{candidate_id}/skills', function (string $candidate_id) {
+            return response()->json([
+                'message' => 'Candidate skills update endpoint is ready.',
+                'candidate_id' => $candidate_id,
+            ]);
+        })->name('cia.career.profiles.update_skills');
+
+        Route::get('/recommendations/{candidate_id}', function (string $candidate_id) {
+            return response()->json([
+                'message' => 'Candidate recommendations endpoint is ready.',
+                'candidate_id' => $candidate_id,
+                'recommendations' => [],
+            ]);
+        })->name('cia.career.recommendations');
+
+        Route::post('/vector-search', function () {
+            return response()->json([
+                'message' => 'Vector search endpoint is ready.',
+                'results' => [],
+            ]);
+        })->name('cia.career.vector_search');
+
+        Route::get('/analytics', function () {
+            return response()->json([
+                'message' => 'Career analytics endpoint is ready.',
+            ]);
+        })->name('cia.career.analytics');
+    });
