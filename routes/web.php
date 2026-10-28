@@ -1,6 +1,11 @@
 <?php
 
+use App\Http\Controllers\CiaController;
 use Illuminate\Support\Facades\Route;
+
+Route::post('/candidate/cia/career/skill-gap', [CiaController::class, 'skillGap'])
+    ->middleware(['auth'])
+    ->name('cia.career.skill_gap');
 
 Route::prefix('cia/career')
     ->middleware(['auth'])
