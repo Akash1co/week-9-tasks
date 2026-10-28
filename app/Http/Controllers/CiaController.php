@@ -7,9 +7,12 @@ use App\Models\QuizAttempt;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
+use Symfony\Component\Process\Process;
 
 class CiaController extends \Illuminate\Routing\Controller
 {
@@ -99,6 +102,95 @@ class CiaController extends \Illuminate\Routing\Controller
             'gaps' => $analysis['gaps'],
             'priority_learning' => $analysis['priority_learning'],
             'radar_data' => $radarData,
+        ]);
+    }
+
+    public function careerRecommendations(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'target_role' => ['required', 'string', 'max:120'],
+            'skills' => ['sometimes', 'array', 'max:50'],
+            'skills.*' => ['string', 'max:120'],
+            'skill_gaps' => ['sometimes', 'array', 'max:50'],
+            'skill_gaps.*' => ['string', 'max:120'],
+            'profile' => ['sometimes', 'array'],
+        ]);
+
+        $payload = [
+            'candidate_id' => (string) $request->user()->getAuthIdentifier(),
+            'target_role' => trim($validated['target_role']),
+            'skills' => array_values($validated['skills'] ?? []),
+            'skill_gaps' => array_values($validated['skill_gaps'] ?? []),
+            'profile' => $validated['profile'] ?? [],
+        ];
+
+        try {
+            $input = json_encode($payload, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            Log::error('Career recommendation input could not be encoded.', [
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Unable to prepare recommendation input.'], 500);
+        }
+
+        $process = new Process([
+            (string) env('CIA_PYTHON_BINARY', 'python'),
+            base_path('scripts/career_recommendations.py'),
+        ], base_path());
+        $process->setInput($input);
+        $process->setTimeout(90);
+
+        try {
+            $process->run();
+        } catch (ProcessTimedOutException $exception) {
+            Log::warning('Career recommendation agent timed out.', [
+                'candidate_id' => $payload['candidate_id'],
+            ]);
+
+            return response()->json(['message' => 'Career recommendations timed out. Please try again.'], 504);
+        }
+
+        if (! $process->isSuccessful()) {
+            Log::error('Career recommendation agent failed.', [
+                'candidate_id' => $payload['candidate_id'],
+                'exit_code' => $process->getExitCode(),
+                'stderr' => $process->getErrorOutput(),
+            ]);
+
+            return response()->json(['message' => 'Career recommendations could not be generated.'], 502);
+        }
+
+        try {
+            $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            Log::error('Career recommendation agent returned invalid JSON.', [
+                'candidate_id' => $payload['candidate_id'],
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Career recommendation service returned an invalid response.'], 502);
+        }
+
+        if (! is_array($result) || ! isset($result['career_paths']) || count($result['career_paths']) !== 3) {
+            Log::error('Career recommendation agent returned an invalid response shape.', [
+                'candidate_id' => $payload['candidate_id'],
+            ]);
+
+            return response()->json(['message' => 'Career recommendation service returned an invalid response.'], 502);
+        }
+
+        $logId = DB::table('cia_search_logs')->insertGetId([
+            'candidate_id' => $payload['candidate_id'],
+            'request_payload' => json_encode($payload, JSON_THROW_ON_ERROR),
+            'results' => json_encode($result, JSON_THROW_ON_ERROR),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return response()->json([
+            'log_id' => $logId,
+            'career_paths' => $result['career_paths'],
         ]);
     }
 

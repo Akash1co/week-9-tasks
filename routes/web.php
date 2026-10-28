@@ -7,6 +7,10 @@ Route::post('/candidate/cia/career/skill-gap', [CiaController::class, 'skillGap'
     ->middleware(['auth'])
     ->name('cia.career.skill_gap');
 
+Route::post('/candidate/cia/career/recommendations', [CiaController::class, 'careerRecommendations'])
+    ->middleware(['auth'])
+    ->name('cia.career.recommendations.generate');
+
 Route::prefix('cia/career')
     ->middleware(['auth'])
     ->group(function () {
