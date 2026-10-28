@@ -23,6 +23,59 @@
     </div>
 </section>
 
+<section class="cia-career-recommendations" aria-labelledby="cia-career-recommendations-title">
+    <h2 id="cia-career-recommendations-title">Career recommendations</h2>
+    <form id="cia-career-recommendations-form">
+        @csrf
+        <label for="cia-career-skills">Your skills (comma separated)</label>
+        <input id="cia-career-skills" name="skills" type="text" maxlength="1000">
+
+        <label for="cia-career-gaps">Skills to improve (comma separated)</label>
+        <input id="cia-career-gaps" name="skill_gaps" type="text" maxlength="1000">
+
+        <label for="cia-career-target-role">Career goal</label>
+        <input id="cia-career-target-role" name="target_role" type="text" maxlength="120" required>
+
+        <button type="submit">Recommend career paths</button>
+    </form>
+    <p id="cia-career-recommendations-status" role="status" aria-live="polite"></p>
+    <div id="cia-career-recommendations-results" class="cia-career-paths"></div>
+</section>
+
+<style>
+    .cia-career-recommendations {
+        margin-block: 2rem;
+    }
+
+    .cia-career-recommendations form {
+        display: grid;
+        gap: 0.75rem;
+        max-width: 42rem;
+    }
+
+    .cia-career-recommendations input {
+        padding: 0.6rem;
+    }
+
+    .cia-career-recommendations button {
+        justify-self: start;
+        padding: 0.65rem 1rem;
+    }
+
+    .cia-career-paths {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+        margin-top: 1rem;
+    }
+
+    .cia-career-path {
+        border: 1px solid #d1d5db;
+        border-radius: 0.5rem;
+        padding: 1rem;
+    }
+</style>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
     (() => {
@@ -103,6 +156,80 @@
                     },
                 });
                 status.textContent = 'Analysis complete.';
+            } catch (error) {
+                status.textContent = error.message;
+            }
+        });
+    })();
+</script>
+<script>
+    (() => {
+        const form = document.getElementById('cia-career-recommendations-form');
+        const status = document.getElementById('cia-career-recommendations-status');
+        const results = document.getElementById('cia-career-recommendations-results');
+
+        const splitList = (value) => value
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
+
+        const appendText = (parent, tag, text) => {
+            const element = document.createElement(tag);
+            element.textContent = text;
+            parent.appendChild(element);
+            return element;
+        };
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            status.textContent = 'Building your career recommendations...';
+            results.replaceChildren();
+
+            try {
+                const response = await fetch('/candidate/cia/career/recommendations', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': form.querySelector('[name="_token"]').value,
+                    },
+                    body: JSON.stringify({
+                        target_role: form.elements.target_role.value.trim(),
+                        skills: splitList(form.elements.skills.value),
+                        skill_gaps: splitList(form.elements.skill_gaps.value),
+                    }),
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.message || 'Career recommendations could not be generated.');
+                }
+
+                result.career_paths.forEach((path) => {
+                    const card = document.createElement('article');
+                    card.className = 'cia-career-path';
+                    appendText(card, 'h3', path.title);
+                    appendText(card, 'p', path.overview);
+                    appendText(card, 'h4', 'Required competencies');
+                    const competencies = document.createElement('ul');
+                    path.required_competencies.forEach((competency) => {
+                        appendText(competencies, 'li', competency);
+                    });
+                    card.appendChild(competencies);
+                    appendText(card, 'h4', `Estimated timeframe: ${path.estimated_timeframe}`);
+                    appendText(card, 'h4', 'Milestones');
+                    const milestones = document.createElement('ol');
+                    path.milestones.forEach((milestone) => {
+                        appendText(
+                            milestones,
+                            'li',
+                            `${milestone.name} — ${milestone.action} (${milestone.timeframe})`
+                        );
+                    });
+                    card.appendChild(milestones);
+                    results.appendChild(card);
+                });
+                status.textContent = 'Three career paths are ready.';
             } catch (error) {
                 status.textContent = error.message;
             }
