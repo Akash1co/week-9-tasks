@@ -1,9 +1,9 @@
 # CIA Career Intelligence API Contract
 
 This document describes the authenticated career-intelligence endpoints. All
-paths are relative to the application origin. The route implementations are
-placeholders; request validation, persistence, and authorization beyond the
-`auth` middleware must be implemented before production use.
+paths are relative to the application origin. The original career endpoints
+remain placeholders; the skill-gap endpoint uses illustrative database
+assumptions documented in its section below.
 
 ## Conventions
 
@@ -407,9 +407,64 @@ Response schema:
 }
 ```
 
+## 8. Analyze a candidate's skill gap
+
+`POST /candidate/cia/career/skill-gap`
+Route name: `cia.career.skill_gap`
+
+Requires an authenticated candidate. The candidate is taken from the current
+session; do not send a candidate ID in the request.
+
+### Request
+
+```json
+{
+  "target_role": "Full Stack Developer"
+}
+```
+
+`target_role` is required and must be a string of at most 120 characters.
+
+### `200 OK`
+
+```json
+{
+  "score": 78,
+  "gaps": ["Vector Search", "DevOps"],
+  "priority_learning": [
+    "Build Vector Search skills with focused practice aligned to the target-role benchmark."
+  ],
+  "radar_data": {
+    "labels": ["Backend PHP", "Laravel", "Vector Search", "API Design", "DevOps"],
+    "candidate_scores": [88, 92, 70, 85, 60],
+    "target_scores": [88, 92, 75, 90, 75]
+  }
+}
+```
+
+`score` is readiness relative to the target benchmarks (0–100).
+`radar_data` arrays share the same index order. Known benchmarks are supplied
+for Backend Developer, Full Stack Developer, Data Scientist, and DevOps
+Engineer; other roles use the default benchmark.
+
+The illustrative persistence schema is:
+
+- `lesson_user`: `user_id`, `lesson_id`, and nullable `completed_at`.
+- `lessons`: `id`, `title`, and `module_name`.
+- `quiz_attempts`: `user_id`, `skill`, `score`, and nullable `completed_at`.
+
+The candidate's completed lessons and completed quiz attempts are scoped to
+the authenticated user. When `GROQ_API_KEY` is configured, the skill profile
+and target role are sent to Groq for structured gap and priority suggestions.
+The model is configurable with `GROQ_MODEL`. Missing configuration, a failed
+request, or an invalid model response is logged and falls back to local
+benchmark-based suggestions.
+
 ## Errors
 
-The following error responses apply to all seven routes.
+The original routes use the common error examples below. Laravel validation
+for the skill-gap request returns `422 Unprocessable Entity` when
+`target_role` is missing or invalid.
 
 ### `400 Bad Request`
 
