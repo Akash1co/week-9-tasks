@@ -283,10 +283,15 @@ Response schema:
 }
 ```
 
-## 6. Search profiles by vector similarity
+## 6. Match candidate skills to roles
 
-`POST /cia/career/vector-search`  
+`POST /candidate/cia/career/vector-search`
+
 Route name: `cia.career.vector_search`
+
+This authenticated endpoint embeds the candidate's skill profile, ranks the
+seeded internship and career roles using cosine similarity, and logs each
+execution in `cia_search_logs`.
 
 ### Request headers
 
@@ -296,11 +301,7 @@ Use the common headers and include `Content-Type: application/json`.
 
 ```json
 {
-  "query": "Candidates experienced in Python and analytics",
-  "limit": 10,
-  "filters": {
-    "skills": ["Python"]
-  }
+  "skills": ["Python", "SQL", "Data Visualization"]
 }
 ```
 
@@ -308,11 +309,7 @@ Request schema:
 
 ```json
 {
-  "query": "string, required, non-empty",
-  "limit": "integer, optional, 1 through 100; default 10",
-  "filters": {
-    "skills": ["string, optional"]
-  }
+  "skills": ["string, required; 1 through 50 non-empty skills"]
 }
 ```
 
@@ -320,14 +317,20 @@ Request schema:
 
 ```json
 {
-  "query": "Candidates experienced in Python and analytics",
-  "results": [
+  "log_id": 12,
+  "matches": [
     {
-      "candidate_id": "cand-1042",
-      "similarity": 0.93,
-      "profile": {
-        "name": "Jordan Lee",
-        "skills": ["Python", "Data Analysis"]
+      "role_id": "role-04",
+      "role": "Data Analyst",
+      "match_percentage": 84.2,
+      "cosine_similarity": 0.842,
+      "required_skills": ["SQL", "Excel", "Python", "Data Visualization", "Statistics"],
+      "missing_skills": ["Excel", "Statistics"],
+      "match_criteria": "Turn business data into reliable reports, dashboards, and actionable insights.",
+      "metadata": {
+        "category": "Data",
+        "experience_level": "Entry-level",
+        "work_mode": "Hybrid"
       }
     }
   ]
@@ -338,21 +341,31 @@ Response schema:
 
 ```json
 {
-  "query": "string",
-  "results": [
+  "log_id": "integer",
+  "matches": [
     {
-      "candidate_id": "string",
-      "similarity": "number between 0 and 1",
-      "profile": {
-        "name": "string",
-        "skills": ["string"]
-      }
+      "role_id": "string",
+      "role": "string",
+      "match_percentage": "number between 0 and 100",
+      "cosine_similarity": "number between 0 and 1",
+      "required_skills": ["string"],
+      "missing_skills": ["string"],
+      "match_criteria": "string",
+      "metadata": "object containing role category, experience level, and work mode"
     }
   ]
 }
 ```
 
-An empty `results` array means no matching profiles were found.
+The response contains the five highest-ranked role profiles. Each role's
+`match_percentage` is the ChromaDB cosine similarity expressed as a percentage;
+`missing_skills` lists required skills that are not present in the submitted
+skill list. Seed or refresh the collection with
+`python scripts/seed_chromadb_roles.py` before using the endpoint. Set
+`CIA_CHROMA_PERSIST_DIRECTORY` to override the default persistent collection
+directory and `CIA_PYTHON_BINARY` to select the Python executable used by
+Laravel. ChromaDB's default `all-MiniLM-L6-v2` embedding model is downloaded
+the first time roles are embedded.
 
 ## 7. Career analytics
 

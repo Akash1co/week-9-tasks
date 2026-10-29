@@ -11,6 +11,10 @@ Route::post('/candidate/cia/career/recommendations', [CiaController::class, 'car
     ->middleware(['auth'])
     ->name('cia.career.recommendations.generate');
 
+Route::post('/candidate/cia/career/vector-search', [CiaController::class, 'vectorSearch'])
+    ->middleware(['auth'])
+    ->name('cia.career.vector_search');
+
 Route::prefix('cia/career')
     ->middleware(['auth'])
     ->group(function () {
@@ -47,13 +51,6 @@ Route::prefix('cia/career')
                 'recommendations' => [],
             ]);
         })->name('cia.career.recommendations');
-
-        Route::post('/vector-search', function () {
-            return response()->json([
-                'message' => 'Vector search endpoint is ready.',
-                'results' => [],
-            ]);
-        })->name('cia.career.vector_search');
 
         Route::get('/analytics', function () {
             return response()->json([

@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Exception\ProcessStartFailedException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
 
@@ -143,6 +144,16 @@ class CiaController extends \Illuminate\Routing\Controller
 
         try {
             $process->run();
+        } catch (ProcessStartFailedException $exception) {
+            $result = ['message' => 'Vector search could not be started.'];
+            $logId = $this->logVectorSearch($candidateId, $payload, $result);
+            Log::error('CIA vector search process could not be started.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json($result, 502);
         } catch (ProcessTimedOutException $exception) {
             Log::warning('Career recommendation agent timed out.', [
                 'candidate_id' => $payload['candidate_id'],
@@ -191,6 +202,121 @@ class CiaController extends \Illuminate\Routing\Controller
         return response()->json([
             'log_id' => $logId,
             'career_paths' => $result['career_paths'],
+        ]);
+    }
+
+    public function vectorSearch(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'skills' => ['required', 'array', 'min:1', 'max:50'],
+            'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
+        ]);
+        $candidateId = (string) $request->user()->getAuthIdentifier();
+        $payload = [
+            'candidate_id' => $candidateId,
+            'skills' => array_values(array_map('trim', $validated['skills'])),
+        ];
+
+        try {
+            $input = json_encode($payload, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            Log::error('Vector search input could not be encoded.', [
+                'candidate_id' => $candidateId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Unable to prepare vector-search input.'], 500);
+        }
+
+        $process = new Process([
+            (string) env('CIA_PYTHON_BINARY', 'python'),
+            base_path('scripts/vector_search_roles.py'),
+        ], base_path());
+        $process->setInput($input);
+        $process->setEnv([
+            'CIA_CHROMA_PERSIST_DIRECTORY' => (string) env(
+                'CIA_CHROMA_PERSIST_DIRECTORY',
+                storage_path('app/chromadb')
+            ),
+        ]);
+        $process->setTimeout(90);
+
+        try {
+            $process->run();
+        } catch (ProcessTimedOutException $exception) {
+            $result = ['message' => 'Vector search timed out.'];
+            $logId = $this->logVectorSearch($candidateId, $payload, $result);
+            Log::warning('CIA vector search timed out.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+            ]);
+
+            return response()->json($result, 504);
+        }
+
+        if (! $process->isSuccessful()) {
+            $result = ['message' => 'Vector search could not be completed.'];
+            $logId = $this->logVectorSearch($candidateId, $payload, $result);
+            Log::error('CIA vector search process failed.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exit_code' => $process->getExitCode(),
+                'stderr' => $process->getErrorOutput(),
+            ]);
+
+            return response()->json($result, 502);
+        }
+
+        try {
+            $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            $failure = ['message' => 'Vector search returned an invalid response.'];
+            $logId = $this->logVectorSearch($candidateId, $payload, $failure);
+            Log::error('CIA vector search returned invalid JSON.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json($failure, 502);
+        }
+
+        if (
+            ! is_array($result)
+            || ! isset($result['matches'])
+            || ! is_array($result['matches'])
+            || count($result['matches']) !== 5
+        ) {
+            $failure = ['message' => 'Vector search returned an invalid response.'];
+            $logId = $this->logVectorSearch($candidateId, $payload, $failure);
+            Log::error('CIA vector search returned an invalid response shape.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+            ]);
+
+            return response()->json($failure, 502);
+        }
+
+        $logId = $this->logVectorSearch($candidateId, $payload, $result);
+
+        return response()->json([
+            'log_id' => $logId,
+            'matches' => $result['matches'],
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $requestPayload
+     * @param  array<string, mixed>  $results
+     */
+    private function logVectorSearch(string $candidateId, array $requestPayload, array $results): int
+    {
+        return DB::table('cia_search_logs')->insertGetId([
+            'candidate_id' => $candidateId,
+            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
+            'results' => json_encode($results, JSON_THROW_ON_ERROR),
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
     }
 

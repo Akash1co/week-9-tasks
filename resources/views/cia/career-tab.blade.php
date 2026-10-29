@@ -42,6 +42,24 @@
     <div id="cia-career-recommendations-results" class="cia-career-paths"></div>
 </section>
 
+<section class="cia-role-matching" aria-labelledby="cia-role-matching-title">
+    <h2 id="cia-role-matching-title">Internship &amp; role matching</h2>
+    <form id="cia-role-matching-form">
+        @csrf
+        <label for="cia-role-matching-skills">Your skills (comma separated)</label>
+        <input
+            id="cia-role-matching-skills"
+            name="skills"
+            type="text"
+            maxlength="1000"
+            required
+        >
+        <button type="submit">Find matching roles</button>
+    </form>
+    <p id="cia-role-matching-status" role="status" aria-live="polite"></p>
+    <div id="cia-role-matching-results" class="cia-role-matches"></div>
+</section>
+
 <style>
     .cia-career-recommendations {
         margin-block: 2rem;
@@ -73,6 +91,43 @@
         border: 1px solid #d1d5db;
         border-radius: 0.5rem;
         padding: 1rem;
+    }
+
+    .cia-role-matching {
+        margin-block: 2rem;
+    }
+
+    .cia-role-matching form {
+        display: grid;
+        gap: 0.75rem;
+        max-width: 42rem;
+    }
+
+    .cia-role-matching input {
+        padding: 0.6rem;
+    }
+
+    .cia-role-matching button {
+        justify-self: start;
+        padding: 0.65rem 1rem;
+    }
+
+    .cia-role-matches {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+        margin-top: 1rem;
+    }
+
+    .cia-role-match {
+        border: 1px solid #d1d5db;
+        border-radius: 0.5rem;
+        padding: 1rem;
+    }
+
+    .cia-role-match header {
+        display: flex;
+        justify-content: space-between;
     }
 </style>
 
@@ -156,6 +211,79 @@
                     },
                 });
                 status.textContent = 'Analysis complete.';
+            } catch (error) {
+                status.textContent = error.message;
+            }
+        });
+    })();
+</script>
+<script>
+    (() => {
+        const form = document.getElementById('cia-role-matching-form');
+        const status = document.getElementById('cia-role-matching-status');
+        const results = document.getElementById('cia-role-matching-results');
+
+        const appendText = (parent, tag, text) => {
+            const element = document.createElement(tag);
+            element.textContent = text;
+            parent.appendChild(element);
+            return element;
+        };
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            status.textContent = 'Matching your skills to internship and career roles...';
+            results.replaceChildren();
+
+            const skills = form.elements.skills.value
+                .split(',')
+                .map((skill) => skill.trim())
+                .filter(Boolean);
+
+            try {
+                const response = await fetch('/candidate/cia/career/vector-search', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': form.querySelector('[name="_token"]').value,
+                    },
+                    body: JSON.stringify({ skills }),
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.message || 'Role matching could not be completed.');
+                }
+
+                result.matches.forEach((match, index) => {
+                    const card = document.createElement('article');
+                    card.className = 'cia-role-match';
+                    const header = document.createElement('header');
+                    appendText(header, 'span', `Rank #${index + 1}`);
+                    appendText(header, 'strong', `${match.match_percentage}% match`);
+                    card.appendChild(header);
+                    appendText(card, 'h3', match.role);
+                    appendText(card, 'p', match.match_criteria);
+
+                    const metadata = Object.entries(match.metadata || {})
+                        .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${value}`)
+                        .join(' · ');
+                    if (metadata) {
+                        appendText(card, 'p', metadata);
+                    }
+
+                    appendText(card, 'h4', 'Missing skills');
+                    const gaps = document.createElement('ul');
+                    if (match.missing_skills.length) {
+                        match.missing_skills.forEach((skill) => appendText(gaps, 'li', skill));
+                    } else {
+                        appendText(gaps, 'li', 'No required skill gaps identified.');
+                    }
+                    card.appendChild(gaps);
+                    results.appendChild(card);
+                });
+                status.textContent = 'Top role matches are ready.';
             } catch (error) {
                 status.textContent = error.message;
             }
