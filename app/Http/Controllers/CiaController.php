@@ -205,6 +205,149 @@ class CiaController extends \Illuminate\Routing\Controller
         ]);
     }
 
+    public function learningPath(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'target_role' => ['required', 'string', 'max:120', 'regex:/\S/'],
+            'skills' => ['sometimes', 'array', 'max:50'],
+            'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
+            'skill_gaps' => ['sometimes', 'array', 'max:50'],
+            'skill_gaps.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
+            'experience_level' => ['sometimes', 'string', 'max:80'],
+            'weekly_hours' => ['sometimes', 'integer', 'min:1', 'max:40'],
+            'profile' => ['sometimes', 'array', 'max:50'],
+        ]);
+        $candidateId = (string) $request->user()->getAuthIdentifier();
+        $input = [
+            'target_role' => trim($validated['target_role']),
+            'skills' => array_values(array_map('trim', $validated['skills'] ?? [])),
+            'skill_gaps' => array_values(array_map('trim', $validated['skill_gaps'] ?? [])),
+            'experience_level' => trim($validated['experience_level'] ?? 'intermediate'),
+            'weekly_hours' => (int) ($validated['weekly_hours'] ?? 7),
+            'profile' => $validated['profile'] ?? [],
+        ];
+        $requestPayload = ['candidate_id' => $candidateId] + $input;
+
+        try {
+            $encodedInput = json_encode($input, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            Log::error('Learning path input could not be encoded.', [
+                'candidate_id' => $candidateId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Unable to prepare learning path input.'], 500);
+        }
+
+        $process = new Process([
+            (string) env('CIA_PYTHON_BINARY', 'python'),
+            base_path('scripts/langgraph_learning_path.py'),
+        ], base_path());
+        $process->setInput($encodedInput);
+        $process->setEnv([
+            'GROQ_API_KEY' => (string) env('GROQ_API_KEY', ''),
+            'GROQ_MODEL' => (string) env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+        ]);
+        $process->setTimeout(240);
+
+        try {
+            $process->run();
+        } catch (ProcessStartFailedException $exception) {
+            $message = 'Learning path service could not be started.';
+            $logId = $this->logLearningPath($candidateId, $requestPayload, [
+                'status' => 'failed',
+                'message' => $message,
+            ]);
+            Log::error('CIA learning path process could not be started.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+        } catch (ProcessTimedOutException $exception) {
+            $message = 'Learning path generation timed out. Please try again.';
+            $logId = $this->logLearningPath($candidateId, $requestPayload, [
+                'status' => 'failed',
+                'message' => $message,
+            ]);
+            Log::warning('CIA learning path process timed out.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+            ]);
+
+            return response()->json(['message' => $message, 'log_id' => $logId], 504);
+        }
+
+        if (! $process->isSuccessful()) {
+            $message = 'Learning path could not be generated.';
+            $logId = $this->logLearningPath($candidateId, $requestPayload, [
+                'status' => 'failed',
+                'message' => $message,
+            ]);
+            Log::error('CIA learning path process failed.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exit_code' => $process->getExitCode(),
+                'stderr' => $process->getErrorOutput(),
+            ]);
+
+            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+        }
+
+        try {
+            $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            $message = 'Learning path service returned an invalid response.';
+            $logId = $this->logLearningPath($candidateId, $requestPayload, [
+                'status' => 'failed',
+                'message' => $message,
+            ]);
+            Log::error('CIA learning path service returned invalid JSON.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+        }
+
+        if (
+            ! is_array($result)
+            || ! isset($result['schedule'])
+            || ! is_array($result['schedule'])
+            || count($result['schedule']) !== 8
+            || count(array_filter(
+                $result['schedule'],
+                fn ($week): bool => ! is_array($week)
+                    || ! is_array($week['days'] ?? null)
+                    || count($week['days']) !== 7
+            )) !== 0
+            || ! is_string($result['mermaid'] ?? null)
+            || ! is_array($result['validation'] ?? null)
+        ) {
+            $message = 'Learning path service returned an invalid response.';
+            $logId = $this->logLearningPath($candidateId, $requestPayload, [
+                'status' => 'failed',
+                'message' => $message,
+            ]);
+            Log::error('CIA learning path service returned an invalid response shape.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+            ]);
+
+            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+        }
+
+        $logId = $this->logLearningPath(
+            $candidateId,
+            $requestPayload,
+            ['status' => 'success'] + $result
+        );
+
+        return response()->json(['log_id' => $logId] + $result);
+    }
+
     public function vectorSearch(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -302,6 +445,21 @@ class CiaController extends \Illuminate\Routing\Controller
         return response()->json([
             'log_id' => $logId,
             'matches' => $result['matches'],
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $requestPayload
+     * @param  array<string, mixed>  $results
+     */
+    private function logLearningPath(string $candidateId, array $requestPayload, array $results): int
+    {
+        return DB::table('cia_search_logs')->insertGetId([
+            'candidate_id' => $candidateId,
+            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
+            'results' => json_encode($results, JSON_THROW_ON_ERROR),
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
     }
 

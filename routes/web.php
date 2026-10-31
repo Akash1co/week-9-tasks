@@ -11,6 +11,10 @@ Route::post('/candidate/cia/career/recommendations', [CiaController::class, 'car
     ->middleware(['auth'])
     ->name('cia.career.recommendations.generate');
 
+Route::post('/candidate/cia/career/learning-path', [CiaController::class, 'learningPath'])
+    ->middleware(['auth'])
+    ->name('cia.career.learning_path');
+
 Route::post('/candidate/cia/career/vector-search', [CiaController::class, 'vectorSearch'])
     ->middleware(['auth'])
     ->name('cia.career.vector_search');
